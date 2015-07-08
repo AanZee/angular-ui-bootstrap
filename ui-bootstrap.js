@@ -2,7 +2,7 @@
  * angular-ui-bootstrap
  * http://angular-ui.github.io/bootstrap/
 
- * Version: 0.13.1-SNAPSHOT - 2015-07-08
+ * Version: 0.13.0 - 2015-05-02
  * License: MIT
  */
 angular.module("ui.bootstrap", ["ui.bootstrap.collapse","ui.bootstrap.accordion","ui.bootstrap.alert","ui.bootstrap.bindHtml","ui.bootstrap.buttons","ui.bootstrap.carousel","ui.bootstrap.dateparser","ui.bootstrap.position","ui.bootstrap.datepicker","ui.bootstrap.dropdown","ui.bootstrap.modal","ui.bootstrap.pagination","ui.bootstrap.tooltip","ui.bootstrap.popover","ui.bootstrap.progressbar","ui.bootstrap.rating","ui.bootstrap.tabs","ui.bootstrap.timepicker","ui.bootstrap.transition","ui.bootstrap.typeahead"]);
@@ -193,7 +193,7 @@ angular.module('ui.bootstrap.accordion', ['ui.bootstrap.collapse'])
 angular.module('ui.bootstrap.alert', [])
 
 .controller('AlertController', ['$scope', '$attrs', function ($scope, $attrs) {
-  $scope.closeable = !!$attrs.close;
+  $scope.closeable = 'close' in $attrs;
   this.close = $scope.close;
 }])
 
@@ -316,11 +316,9 @@ angular.module('ui.bootstrap.buttons', [])
 *
 */
 angular.module('ui.bootstrap.carousel', [])
-.controller('CarouselController', ['$scope', '$element', '$interval', '$animate', function ($scope, $element, $interval, $animate) {
+.controller('CarouselController', ['$scope', '$interval', '$animate', function ($scope, $interval, $animate) {
   var self = this,
     slides = self.slides = $scope.slides = [],
-    NO_TRANSITION = 'uib-noTransition',
-    SLIDE_DIRECTION = 'uib-slideDirection',
     currentIndex = -1,
     currentInterval, isPlaying;
   self.currentSlide = null;
@@ -333,34 +331,28 @@ angular.module('ui.bootstrap.carousel', [])
     if (direction === undefined) {
       direction = nextIndex > self.getCurrentIndex() ? 'next' : 'prev';
     }
-    //Prevent this user-triggered transition from occurring if there is already one in progress
-    if (nextSlide && nextSlide !== self.currentSlide && !$scope.$currentTransition) {
-      goNext(nextSlide, nextIndex, direction);
+    if (nextSlide && nextSlide !== self.currentSlide) {
+      goNext();
+    }
+    function goNext() {
+      // Scope has been destroyed, stop here.
+      if (destroyed) { return; }
+
+      angular.extend(nextSlide, {direction: direction, active: true});
+      angular.extend(self.currentSlide || {}, {direction: direction, active: false});
+      if ($animate.enabled() && !$scope.noTransition && nextSlide.$element) {
+        $scope.$currentTransition = true;
+        nextSlide.$element.one('$animate:close', function closeFn() {
+          $scope.$currentTransition = null;
+        });
+      }
+
+      self.currentSlide = nextSlide;
+      currentIndex = nextIndex;
+      //every time you change slides, reset the timer
+      restartTimer();
     }
   };
-
-  function goNext(slide, index, direction) {
-    // Scope has been destroyed, stop here.
-    if (destroyed) { return; }
-
-    angular.extend(slide, {direction: direction, active: true});
-    angular.extend(self.currentSlide || {}, {direction: direction, active: false});
-    if ($animate.enabled() && !$scope.noTransition && !$scope.$currentTransition &&
-      slide.$element) {
-      slide.$element.data(SLIDE_DIRECTION, slide.direction);
-      $scope.$currentTransition = true;
-      slide.$element.one('$animate:close', function closeFn() {
-        $scope.$currentTransition = null;
-      });
-    }
-
-    self.currentSlide = slide;
-    currentIndex = index;
-
-    //every time you change slides, reset the timer
-    restartTimer();
-  }
-
   $scope.$on('$destroy', function () {
     destroyed = true;
   });
@@ -392,23 +384,19 @@ angular.module('ui.bootstrap.carousel', [])
   $scope.next = function() {
     var newIndex = (self.getCurrentIndex() + 1) % slides.length;
 
-    if (newIndex === 0 && $scope.noWrap()) {
-      $scope.pause();
-      return;
+    //Prevent this user-triggered transition from occurring if there is already one in progress
+    if (!$scope.$currentTransition) {
+      return self.select(getSlideByIndex(newIndex), 'next');
     }
-
-    return self.select(getSlideByIndex(newIndex), 'next');
   };
 
   $scope.prev = function() {
     var newIndex = self.getCurrentIndex() - 1 < 0 ? slides.length - 1 : self.getCurrentIndex() - 1;
 
-    if ($scope.noWrap() && newIndex === slides.length - 1){
-      $scope.pause();
-      return;
+    //Prevent this user-triggered transition from occurring if there is already one in progress
+    if (!$scope.$currentTransition) {
+      return self.select(getSlideByIndex(newIndex), 'prev');
     }
-
-    return self.select(getSlideByIndex(newIndex), 'prev');
   };
 
   $scope.isActive = function(slide) {
@@ -435,7 +423,7 @@ angular.module('ui.bootstrap.carousel', [])
 
   function timerFn() {
     var interval = +$scope.interval;
-    if (isPlaying && !isNaN(interval) && interval > 0 && slides.length) {
+    if (isPlaying && !isNaN(interval) && interval > 0) {
       $scope.next();
     } else {
       $scope.pause();
@@ -489,10 +477,6 @@ angular.module('ui.bootstrap.carousel', [])
     }
   };
 
-  $scope.$watch('noTransition', function(noTransition) {
-    $element.data(NO_TRANSITION, noTransition);
-  });
-
 }])
 
 /**
@@ -544,8 +528,7 @@ angular.module('ui.bootstrap.carousel', [])
     scope: {
       interval: '=',
       noTransition: '=',
-      noPause: '=',
-      noWrap: '&'
+      noPause: '='
     }
   };
 }])
@@ -622,16 +605,13 @@ function CarouselDemoCtrl($scope) {
 .animation('.item', [
          '$animate',
 function ($animate) {
-  var NO_TRANSITION = 'uib-noTransition',
-    SLIDE_DIRECTION = 'uib-slideDirection';
-
   return {
     beforeAddClass: function (element, className, done) {
       // Due to transclusion, noTransition property is on parent's scope
       if (className == 'active' && element.parent() &&
-          !element.parent().data(NO_TRANSITION)) {
+          !element.parent().scope().noTransition) {
         var stopped = false;
-        var direction = element.data(SLIDE_DIRECTION);
+        var direction = element.isolateScope().direction;
         var directionClass = direction == 'next' ? 'left' : 'right';
         element.addClass(direction);
         $animate.addClass(element, directionClass).then(function () {
@@ -650,9 +630,9 @@ function ($animate) {
     beforeRemoveClass: function (element, className, done) {
       // Due to transclusion, noTransition property is on parent's scope
       if (className == 'active' && element.parent() &&
-          !element.parent().data(NO_TRANSITION)) {
+          !element.parent().scope().noTransition) {
         var stopped = false;
-        var direction = element.data(SLIDE_DIRECTION);
+        var direction = element.isolateScope().direction;
         var directionClass = direction == 'next' ? 'left' : 'right';
         $animate.addClass(element, directionClass).then(function () {
           if (!stopped) {
@@ -1562,7 +1542,7 @@ function ($compile, $parse, $document, $position, dateFilter, dateParser, datepi
           if ( key === 'datepickerMode' ) {
             var setAttribute = getAttribute.assign;
             scope.$watch('watchData.' + key, function(value, oldvalue) {
-              if ( angular.isFunction(setAttribute) && value !== oldvalue ) {
+              if ( value !== oldvalue ) {
                 setAttribute(scope.$parent, value);
               }
             });
@@ -1758,11 +1738,11 @@ angular.module('ui.bootstrap.dropdown', ['ui.bootstrap.position'])
   this.open = function( dropdownScope ) {
     if ( !openScope ) {
       $document.bind('click', closeDropdown);
-      $document.bind('keydown', keybindFilter);
+      $document.bind('keydown', escapeKeyBind);
     }
 
     if ( openScope && openScope !== dropdownScope ) {
-      openScope.isOpen = false;
+        openScope.isOpen = false;
     }
 
     openScope = dropdownScope;
@@ -1772,7 +1752,7 @@ angular.module('ui.bootstrap.dropdown', ['ui.bootstrap.position'])
     if ( openScope === dropdownScope ) {
       openScope = null;
       $document.unbind('click', closeDropdown);
-      $document.unbind('keydown', keybindFilter);
+      $document.unbind('keydown', escapeKeyBind);
     }
   };
 
@@ -1785,7 +1765,7 @@ angular.module('ui.bootstrap.dropdown', ['ui.bootstrap.position'])
 
     var toggleElement = openScope.getToggleElement();
     if ( evt && toggleElement && toggleElement[0].contains(evt.target) ) {
-      return;
+        return;
     }
 
     var $element = openScope.getElement();
@@ -1800,30 +1780,22 @@ angular.module('ui.bootstrap.dropdown', ['ui.bootstrap.position'])
     }
   };
 
-  var keybindFilter = function( evt ) {
+  var escapeKeyBind = function( evt ) {
     if ( evt.which === 27 ) {
       openScope.focusToggleElement();
       closeDropdown();
     }
-    else if ( openScope.isKeynavEnabled() && /(38|40)/.test(evt.which) && openScope.isOpen ) {
-      evt.preventDefault();
-      evt.stopPropagation();
-      openScope.focusDropdownEntry(evt.which);
-    }
   };
 }])
 
-.controller('DropdownController', ['$scope', '$attrs', '$parse', 'dropdownConfig', 'dropdownService', '$animate', '$position', '$document', '$compile', '$templateRequest', function($scope, $attrs, $parse, dropdownConfig, dropdownService, $animate, $position, $document, $compile, $templateRequest) {
+.controller('DropdownController', ['$scope', '$attrs', '$parse', 'dropdownConfig', 'dropdownService', '$animate', '$position', '$document', function($scope, $attrs, $parse, dropdownConfig, dropdownService, $animate, $position, $document) {
   var self = this,
-    scope = $scope.$new(), // create a child scope so we are not polluting original one
-	templateScope,
-    openClass = dropdownConfig.openClass,
-    getIsOpen,
-    setIsOpen = angular.noop,
-    toggleInvoker = $attrs.onToggle ? $parse($attrs.onToggle) : angular.noop,
-    appendToBody = false,
-    keynavEnabled =false,
-    selectedOption = null;
+      scope = $scope.$new(), // create a child scope so we are not polluting original one
+      openClass = dropdownConfig.openClass,
+      getIsOpen,
+      setIsOpen = angular.noop,
+      toggleInvoker = $attrs.onToggle ? $parse($attrs.onToggle) : angular.noop,
+      appendToBody = false;
 
   this.init = function( element ) {
     self.$element = element;
@@ -1838,7 +1810,6 @@ angular.module('ui.bootstrap.dropdown', ['ui.bootstrap.position'])
     }
 
     appendToBody = angular.isDefined($attrs.dropdownAppendToBody);
-    keynavEnabled = angular.isDefined($attrs.keyboardNav);
 
     if ( appendToBody && self.dropdownMenu ) {
       $document.find('body').append( self.dropdownMenu );
@@ -1869,40 +1840,6 @@ angular.module('ui.bootstrap.dropdown', ['ui.bootstrap.position'])
     return self.$element;
   };
 
-  scope.isKeynavEnabled = function() {
-    return keynavEnabled;
-  };
-
-  scope.focusDropdownEntry = function(keyCode) {
-    var elems = self.dropdownMenu ? //If append to body is used.
-      (angular.element(self.dropdownMenu).find('a')) :
-      (angular.element(self.$element).find('ul').eq(0).find('a'));
-
-    switch (keyCode) {
-      case (40): {
-        if ( !angular.isNumber(self.selectedOption)) {
-          self.selectedOption = 0;
-        } else {
-          self.selectedOption = (self.selectedOption === elems.length -1 ?
-            self.selectedOption :
-            self.selectedOption + 1);
-        }
-        break;
-      }
-      case (38): {
-        if ( !angular.isNumber(self.selectedOption)) {
-          return;
-        } else {
-          self.selectedOption = (self.selectedOption === 0 ?
-            0 :
-            self.selectedOption - 1);
-        }
-        break;
-      }
-    }
-    elems[self.selectedOption].focus();
-  };
-
   scope.focusToggleElement = function() {
     if ( self.toggleElement ) {
       self.toggleElement[0].focus();
@@ -1922,31 +1859,10 @@ angular.module('ui.bootstrap.dropdown', ['ui.bootstrap.position'])
     $animate[isOpen ? 'addClass' : 'removeClass'](self.$element, openClass);
 
     if ( isOpen ) {
-      if (self.dropdownMenuTemplateUrl) {
-        $templateRequest(self.dropdownMenuTemplateUrl).then(function(tplContent) {
-          templateScope = scope.$new();
-          $compile(tplContent.trim())(templateScope, function(dropdownElement) {
-            var newEl = dropdownElement;
-            self.dropdownMenu.replaceWith(newEl);
-            self.dropdownMenu = newEl;
-          });
-        });
-      }
-
       scope.focusToggleElement();
       dropdownService.open( scope );
     } else {
-      if (self.dropdownMenuTemplateUrl) {
-        if (templateScope) {
-          templateScope.$destroy();
-        }
-        var newEl = angular.element('<ul class="dropdown-menu"></ul>');
-        self.dropdownMenu.replaceWith(newEl);
-        self.dropdownMenu = newEl;
-      }
-
       dropdownService.close( scope );
-      self.selectedOption = null;
     }
 
     setIsOpen($scope, isOpen);
@@ -1956,9 +1872,7 @@ angular.module('ui.bootstrap.dropdown', ['ui.bootstrap.position'])
   });
 
   $scope.$on('$locationChangeSuccess', function() {
-    if (scope.getAutoClose() !== 'disabled') {
-      scope.isOpen = false;
-    }
+    scope.isOpen = false;
   });
 
   $scope.$on('$destroy', function() {
@@ -1980,55 +1894,11 @@ angular.module('ui.bootstrap.dropdown', ['ui.bootstrap.position'])
     restrict: 'AC',
     require: '?^dropdown',
     link: function(scope, element, attrs, dropdownCtrl) {
-      if (!dropdownCtrl) {
+      if ( !dropdownCtrl ) {
         return;
       }
-      var tplUrl = attrs.templateUrl;
-      if (tplUrl) {
-        dropdownCtrl.dropdownMenuTemplateUrl = tplUrl;
-      }
-      if (!dropdownCtrl.dropdownMenu) {
-        dropdownCtrl.dropdownMenu = element;
-      }
+      dropdownCtrl.dropdownMenu = element;
     }
-  };
-})
-
-.directive('keyboardNav', function() {
-  return {
-    restrict: 'A',
-    require: '?^dropdown',
-    link: function (scope, element, attrs, dropdownCtrl) {
-
-      element.bind('keydown', function(e) {
-
-        if ( /(38|40)/.test(e.which)) {
-
-          e.preventDefault();
-          e.stopPropagation();
-
-          var elems = angular.element(element).find('a');
-
-          switch (e.keyCode) {
-            case (40): { // Down
-              if ( !angular.isNumber(dropdownCtrl.selectedOption)) {
-                dropdownCtrl.selectedOption = 0;
-              } else {
-                dropdownCtrl.selectedOption = (dropdownCtrl.selectedOption === elems.length -1 ? dropdownCtrl.selectedOption : dropdownCtrl.selectedOption+1);
-              }
-
-            }
-            break;
-            case (38): { // Up
-              dropdownCtrl.selectedOption = (dropdownCtrl.selectedOption === 0 ? 0 : dropdownCtrl.selectedOption-1);
-            }
-            break;
-          }
-          elems[dropdownCtrl.selectedOption].focus();
-        }
-      });
-    }
-
   };
 })
 
@@ -2126,9 +1996,7 @@ angular.module('ui.bootstrap.modal', [])
 /**
  * A helper directive for the $modal service. It creates a backdrop element.
  */
-  .directive('modalBackdrop', [
-           '$animate', '$modalStack',
-  function ($animate ,  $modalStack) {
+  .directive('modalBackdrop', ['$timeout', function ($timeout) {
     return {
       restrict: 'EA',
       replace: true,
@@ -2140,24 +2008,21 @@ angular.module('ui.bootstrap.modal', [])
     };
 
     function linkFn(scope, element, attrs) {
-      if (attrs.modalInClass) {
-        $animate.addClass(element, attrs.modalInClass);
+      scope.animate = false;
 
-        scope.$on($modalStack.NOW_CLOSING_EVENT, function (e, setIsAsync) {
-          var done = setIsAsync();
-          $animate.removeClass(element, attrs.modalInClass).then(done);
-        });
-      }
+      //trigger CSS transitions
+      $timeout(function () {
+        scope.animate = true;
+      });
     }
   }])
 
-  .directive('modalWindow', [
-           '$modalStack', '$q', '$animate',
-  function ($modalStack ,  $q ,  $animate) {
+  .directive('modalWindow', ['$modalStack', '$q', function ($modalStack, $q) {
     return {
       restrict: 'EA',
       scope: {
-        index: '@'
+        index: '@',
+        animate: '='
       },
       replace: true,
       transclude: true,
@@ -2193,14 +2058,8 @@ angular.module('ui.bootstrap.modal', [])
         });
 
         modalRenderDeferObj.promise.then(function () {
-          if (attrs.modalInClass) {
-            $animate.addClass(element, attrs.modalInClass);
-
-            scope.$on($modalStack.NOW_CLOSING_EVENT, function (e, setIsAsync) {
-              var done = setIsAsync();
-              $animate.removeClass(element, attrs.modalInClass).then(done);
-            });
-          }
+          // trigger CSS transitions
+          scope.animate = true;
 
           var inputsWithAutofocus = element[0].querySelectorAll('[autofocus]');
           /**
@@ -2249,21 +2108,14 @@ angular.module('ui.bootstrap.modal', [])
     };
   })
 
-  .factory('$modalStack', [
-             '$animate', '$timeout', '$document', '$compile', '$rootScope',
-             '$q',
-             '$$stackedMap',
-    function ($animate ,  $timeout ,  $document ,  $compile ,  $rootScope ,
-              $q,
-              $$stackedMap) {
+  .factory('$modalStack', ['$animate', '$timeout', '$document', '$compile', '$rootScope', '$$stackedMap',
+    function ($animate, $timeout, $document, $compile, $rootScope, $$stackedMap) {
 
       var OPENED_MODAL_CLASS = 'modal-open';
 
       var backdropDomEl, backdropScope;
       var openedWindows = $$stackedMap.createNew();
-      var $modalStack = {
-        NOW_CLOSING_EVENT: 'modal.stack.now-closing'
-      };
+      var $modalStack = {};
 
       function backdropIndex() {
         var topBackdropIndex = -1;
@@ -2282,7 +2134,7 @@ angular.module('ui.bootstrap.modal', [])
         }
       });
 
-      function removeModalWindow(modalInstance, elementToReceiveFocus) {
+      function removeModalWindow(modalInstance) {
 
         var body = $document.find('body').eq(0);
         var modalWindow = openedWindows.get(modalInstance).value;
@@ -2290,17 +2142,11 @@ angular.module('ui.bootstrap.modal', [])
         //clean up the stack
         openedWindows.remove(modalInstance);
 
+        //remove window DOM element
         removeAfterAnimate(modalWindow.modalDomEl, modalWindow.modalScope, function() {
           body.toggleClass(OPENED_MODAL_CLASS, openedWindows.length() > 0);
           checkRemoveBackdrop();
         });
-
-        //move focus to specified element if available, or else to body
-        if (elementToReceiveFocus && elementToReceiveFocus.focus) {
-          elementToReceiveFocus.focus();
-        } else {
-          body.focus();
-        }
       }
 
       function checkRemoveBackdrop() {
@@ -2316,24 +2162,18 @@ angular.module('ui.bootstrap.modal', [])
       }
 
       function removeAfterAnimate(domEl, scope, done) {
-        var asyncDeferred;
-        var asyncPromise = null;
-        var setIsAsync = function () {
-          if (!asyncDeferred) {
-            asyncDeferred = $q.defer();
-            asyncPromise = asyncDeferred.promise;
-          }
+        // Closing animation
+        scope.animate = false;
 
-          return function asyncDone() {
-            asyncDeferred.resolve();
-          };
-        };
-        scope.$broadcast($modalStack.NOW_CLOSING_EVENT, setIsAsync);
-
-        // Note that it's intentional that asyncPromise might be null.
-        // That's when setIsAsync has not been called during the
-        // NOW_CLOSING_EVENT broadcast.
-        return $q.when(asyncPromise).then(afterAnimating);
+        if (domEl.attr('modal-animation') && $animate.enabled()) {
+          // transition out
+          domEl.one('$animate:close', function closeFn() {
+            $rootScope.$evalAsync(afterAnimating);
+          });
+        } else {
+          // Ensure this call is async
+          $timeout(afterAnimating);
+        }
 
         function afterAnimating() {
           if (afterAnimating.done) {
@@ -2417,7 +2257,8 @@ angular.module('ui.bootstrap.modal', [])
         var modalWindow = openedWindows.get(modalInstance);
         if (modalWindow && broadcastClosing(modalWindow, result, true)) {
           modalWindow.value.deferred.resolve(result);
-          removeModalWindow(modalInstance, modalWindow.value.modalOpener);
+          removeModalWindow(modalInstance);
+          modalWindow.value.modalOpener.focus();
           return true;
         }
         return !modalWindow;
@@ -2427,7 +2268,8 @@ angular.module('ui.bootstrap.modal', [])
         var modalWindow = openedWindows.get(modalInstance);
         if (modalWindow && broadcastClosing(modalWindow, reason, false)) {
           modalWindow.value.deferred.reject(reason);
-          removeModalWindow(modalInstance, modalWindow.value.modalOpener);
+          removeModalWindow(modalInstance);
+          modalWindow.value.modalOpener.focus();
           return true;
         }
         return !modalWindow;
@@ -3375,15 +3217,9 @@ angular.module('ui.bootstrap.progressbar', [])
 
         this.bars.push(bar);
 
-        bar.max = $scope.max;
-
         bar.$watch('value', function( value ) {
-            bar.recalculatePercentage();
+            bar.percent = +(100 * value / $scope.max).toFixed(2);
         });
-
-        bar.recalculatePercentage = function() {
-            bar.percent = +(100 * bar.value / bar.max).toFixed(2);
-        };
 
         bar.$on('$destroy', function() {
             element = null;
@@ -3394,13 +3230,6 @@ angular.module('ui.bootstrap.progressbar', [])
     this.removeBar = function(bar) {
         this.bars.splice(this.bars.indexOf(bar), 1);
     };
-
-    $scope.$watch('max', function(max) {
-        self.bars.forEach(function (bar) {
-            bar.max = $scope.max;
-            bar.recalculatePercentage();
-        });
-    });
 }])
 
 .directive('progress', function() {
@@ -3410,9 +3239,7 @@ angular.module('ui.bootstrap.progressbar', [])
         transclude: true,
         controller: 'ProgressController',
         require: 'progress',
-        scope: {
-          max: '=?'
-        },
+        scope: {},
         templateUrl: 'template/progressbar/progress.html'
     };
 })
@@ -3425,6 +3252,7 @@ angular.module('ui.bootstrap.progressbar', [])
         require: '^progress',
         scope: {
             value: '=',
+            max: '=?',
             type: '@'
         },
         templateUrl: 'template/progressbar/bar.html',
@@ -3842,8 +3670,7 @@ angular.module('ui.bootstrap.timepicker', [])
   meridians: null,
   readonlyInput: false,
   mousewheel: true,
-  arrowkeys: true,
-  showSpinners: true
+  arrowkeys: true
 })
 
 .controller('TimepickerController', ['$scope', '$attrs', '$parse', '$log', '$locale', 'timepickerConfig', function($scope, $attrs, $parse, $log, $locale, timepickerConfig) {
@@ -4094,10 +3921,7 @@ angular.module('ui.bootstrap.timepicker', [])
     selected.setHours( dt.getHours(), dt.getMinutes() );
     refresh();
   }
-  
-  $scope.showSpinners = angular.isDefined($attrs.showSpinners) ?
-    $scope.$parent.$eval($attrs.showSpinners) : timepickerConfig.showSpinners;
-  
+
   $scope.incrementHours = function() {
     addMinutes( hourStep * 60 );
   };
@@ -4254,8 +4078,8 @@ angular.module('ui.bootstrap.typeahead', ['ui.bootstrap.position', 'ui.bootstrap
   };
 }])
 
-  .directive('typeahead', ['$compile', '$parse', '$q', '$timeout', '$document', '$rootScope', '$position', 'typeaheadParser',
-    function ($compile, $parse, $q, $timeout, $document, $rootScope, $position, typeaheadParser) {
+  .directive('typeahead', ['$compile', '$parse', '$q', '$timeout', '$document', '$position', 'typeaheadParser',
+    function ($compile, $parse, $q, $timeout, $document, $position, typeaheadParser) {
 
   var HOT_KEYS = [9, 13, 27, 38, 40];
 
@@ -4266,10 +4090,7 @@ angular.module('ui.bootstrap.typeahead', ['ui.bootstrap.position', 'ui.bootstrap
       //SUPPORTED ATTRIBUTES (OPTIONS)
 
       //minimal no of characters that needs to be entered before typeahead kicks-in
-      var minLength = originalScope.$eval(attrs.typeaheadMinLength);
-      if (!minLength && minLength !== 0) {
-        minLength = 1;
-      }
+      var minSearch = originalScope.$eval(attrs.typeaheadMinLength) || 1;
 
       //minimal wait time after last character typed before typeahead kicks-in
       var waitTime = originalScope.$eval(attrs.typeaheadWaitMs) || 0;
@@ -4421,7 +4242,7 @@ angular.module('ui.bootstrap.typeahead', ['ui.bootstrap.position', 'ui.bootstrap
 
         hasFocus = true;
 
-        if (minLength === 0 || inputValue && inputValue.length >= minLength) {
+        if (inputValue && inputValue.length >= minSearch) {
           if (waitTime > 0) {
             cancelPreviousTimeout();
             scheduleSearchWithTimeout(inputValue);
@@ -4546,9 +4367,7 @@ angular.module('ui.bootstrap.typeahead', ['ui.bootstrap.position', 'ui.bootstrap
       var dismissClickHandler = function (evt) {
         if (element[0] !== evt.target) {
           resetMatches();
-          if (!$rootScope.$$phase) {
-            scope.$digest();
-          }
+          scope.$digest();
         }
       };
 
@@ -4582,7 +4401,7 @@ angular.module('ui.bootstrap.typeahead', ['ui.bootstrap.position', 'ui.bootstrap
         matches:'=',
         query:'=',
         active:'=',
-        position:'&',
+        position:'=',
         select:'&'
       },
       replace:true,
